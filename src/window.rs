@@ -1852,6 +1852,15 @@ impl Window {
         Ok(())
     }
 
+    /// Sets the seconds this window's glyph stages read as one `float` at Metal buffer index 5,
+    /// bound to both the vertex and the fragment stage on every glyph draw from the next draw
+    /// on. The app keeps the clock and asks for the frames that should move; this neither
+    /// schedules a frame nor refreshes the window. It does nothing where glyph shaders are not
+    /// supported.
+    pub fn set_glyph_shader_time(&mut self, seconds: f32) {
+        self.platform_window.set_glyph_shader_time(seconds);
+    }
+
     /// Mark the window as dirty at the platform level.
     pub fn set_window_edited(&mut self, edited: bool) {
         self.platform_window.set_edited(edited);

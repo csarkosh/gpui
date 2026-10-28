@@ -1483,6 +1483,11 @@ impl PlatformWindow for MacWindow {
         self.0.lock().renderer.set_glyph_shader(shader)
     }
 
+    #[cfg(not(feature = "macos-blade"))]
+    fn set_glyph_shader_time(&self, seconds: f32) {
+        self.0.lock().renderer.set_glyph_shader_time(seconds);
+    }
+
     fn gpu_specs(&self) -> Option<crate::GpuSpecs> {
         None
     }

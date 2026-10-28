@@ -109,6 +109,9 @@ pub(crate) struct MetalRenderer {
     monochrome_sprites_pipeline_state: metal::RenderPipelineState,
     /// The app's glyph stages, drawn instead of gpui's own while set (`set_glyph_shader`).
     glyph_override: Option<metal::RenderPipelineState>,
+    /// Seconds on the app's clock for the glyph stages, bound at `SpriteInputIndex::GlyphTime`
+    /// on every glyph draw (`set_glyph_shader_time`).
+    glyph_time: f32,
     polychrome_sprites_pipeline_state: metal::RenderPipelineState,
     surfaces_pipeline_state: metal::RenderPipelineState,
     unit_vertices: metal::Buffer,
@@ -268,6 +271,7 @@ impl MetalRenderer {
             underlines_pipeline_state,
             monochrome_sprites_pipeline_state,
             glyph_override: None,
+            glyph_time: 0.0,
             polychrome_sprites_pipeline_state,
             surfaces_pipeline_state,
             unit_vertices,
@@ -312,6 +316,17 @@ impl MetalRenderer {
             let _ = shader;
             Err("glyph shaders need gpui's runtime_shaders feature".into())
         }
+    }
+
+    /// Sets the seconds the glyph stages read as one `float` at buffer index 5
+    /// (`SpriteInputIndex::GlyphTime`) on every glyph draw from now on.
+    pub fn set_glyph_shader_time(&mut self, seconds: f32) {
+        self.glyph_time = seconds;
+    }
+
+    /// The seconds the glyph pass binds at `SpriteInputIndex::GlyphTime`.
+    fn glyph_time(&self) -> f32 {
+        self.glyph_time
     }
 
     /// The pipeline glyphs are drawn with: the app's while set, else gpui's own.
@@ -1001,10 +1016,21 @@ impl MetalRenderer {
             mem::size_of_val(&texture_size) as u64,
             &texture_size as *const Size<DevicePixels> as *const _,
         );
+        let glyph_time = self.glyph_time();
+        command_encoder.set_vertex_bytes(
+            SpriteInputIndex::GlyphTime as u64,
+            mem::size_of_val(&glyph_time) as u64,
+            &glyph_time as *const f32 as *const _,
+        );
         command_encoder.set_fragment_buffer(
             SpriteInputIndex::Sprites as u64,
             Some(&instance_buffer.metal_buffer),
             *instance_offset as u64,
+        );
+        command_encoder.set_fragment_bytes(
+            SpriteInputIndex::GlyphTime as u64,
+            mem::size_of_val(&glyph_time) as u64,
+            &glyph_time as *const f32 as *const _,
         );
         command_encoder.set_fragment_texture(SpriteInputIndex::AtlasTexture as u64, Some(&texture));
 
@@ -1386,6 +1412,7 @@ enum SpriteInputIndex {
     ViewportSize = 2,
     AtlasTextureSize = 3,
     AtlasTexture = 4,
+    GlyphTime = 5,
 }
 
 #[repr(C)]
@@ -1460,6 +1487,37 @@ mod tests {
         assert_eq!(renderer.glyph_pipeline().label(), "plain_glyph_fragment");
         renderer.set_glyph_shader(None).unwrap();
         assert_eq!(renderer.glyph_pipeline().label(), own);
+    }
+
+    #[test]
+    fn the_glyph_time_set_is_the_time_the_glyph_pass_binds() {
+        if metal::Device::system_default().is_none() {
+            return;
+        }
+        let mut renderer = MetalRenderer::new(Arc::new(Mutex::new(InstanceBufferPool::default())));
+        assert_eq!(renderer.glyph_time(), 0.0);
+        renderer.set_glyph_shader_time(12.5);
+        assert_eq!(renderer.glyph_time(), 12.5);
+        renderer.set_glyph_shader_time(0.25);
+        assert_eq!(renderer.glyph_time(), 0.25);
+    }
+
+    #[test]
+    fn a_glyph_shader_reading_the_time_at_buffer_five_builds_a_pipeline() {
+        if metal::Device::system_default().is_none() {
+            return;
+        }
+        let mut renderer = MetalRenderer::new(Arc::new(Mutex::new(InstanceBufferPool::default())));
+        let timed = GlyphShader {
+            source: "static_assert(SpriteInputIndex_GlyphTime == 5, \"the glyph time is buffer 5\");\n\
+                fragment float4 timed_glyph_fragment(MonochromeSpriteFragmentInput input [[stage_in]], \
+                constant float *time [[buffer(5)]]) { float4 c = input.color; c.a *= 0.5 + 0.5 * sin(*time); return c; }"
+                .into(),
+            vertex: "monochrome_sprite_vertex".into(),
+            fragment: "timed_glyph_fragment".into(),
+        };
+        renderer.set_glyph_shader(Some(timed)).unwrap();
+        assert_eq!(renderer.glyph_pipeline().label(), "timed_glyph_fragment");
     }
 
     #[test]

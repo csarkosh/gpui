@@ -549,6 +549,7 @@ pub(crate) trait PlatformWindow: HasWindowHandle + HasDisplayHandle {
     fn set_glyph_shader(&self, _shader: Option<crate::GlyphShader>) -> Result<(), String> {
         Err("glyph shaders are macOS only".into())
     }
+    fn set_glyph_shader_time(&self, _seconds: f32) {}
     fn gpu_specs(&self) -> Option<GpuSpecs>;
 
     fn update_ime_position(&self, _bounds: Bounds<Pixels>);

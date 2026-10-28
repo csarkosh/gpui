@@ -15,4 +15,7 @@ sources are 8 MB, the monorepo a gigabyte that every clone and CI run would pay 
 Patches so far: `Window::set_glyph_shader` (tag `v0.2.2-arkos.1`), a per-window hook that
 replaces the glyph (monochrome sprite) stages with functions from a Metal source the app
 supplies, with `GlyphShader`, `GLYPH_SHADER_PRELUDE` and `GLYPH_SHADER_BASE` (Arkos's effects
-design, 2026-10-28).
+design, 2026-10-28); `Window::set_glyph_shader_time` (tag `v0.2.2-arkos.2`), a clock for the
+glyph stages: seconds the app sets, bound as one `float` at Metal buffer index 5
+(`SpriteInputIndex::GlyphTime`) to both glyph stages on every glyph draw, whether or not an app
+shader is set; gpui's own stages ignore it (Arkos's space effect, 2026-10-28).
