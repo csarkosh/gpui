@@ -12,6 +12,7 @@ sources are 8 MB, the monorepo a gigabyte that every clone and CI run would pay 
 - To move to a new gpui: commit the next tarball as `v<version>`, rebase the patch commits onto
   it, tag `v<version>-arkos.1`, and point Arkos at the tag.
 
-Patches so far: none. The first planned is `Window::set_glyph_shader`, a per-window hook that
+Patches so far: `Window::set_glyph_shader` (tag `v0.2.2-arkos.1`), a per-window hook that
 replaces the glyph (monochrome sprite) stages with functions from a Metal source the app
-supplies (Arkos's effects design, 2026-10-28).
+supplies, with `GlyphShader`, `GLYPH_SHADER_PRELUDE` and `GLYPH_SHADER_BASE` (Arkos's effects
+design, 2026-10-28).

@@ -107,6 +107,8 @@ pub(crate) struct MetalRenderer {
     quads_pipeline_state: metal::RenderPipelineState,
     underlines_pipeline_state: metal::RenderPipelineState,
     monochrome_sprites_pipeline_state: metal::RenderPipelineState,
+    /// The app's glyph stages, drawn instead of gpui's own while set (`set_glyph_shader`).
+    glyph_override: Option<metal::RenderPipelineState>,
     polychrome_sprites_pipeline_state: metal::RenderPipelineState,
     surfaces_pipeline_state: metal::RenderPipelineState,
     unit_vertices: metal::Buffer,
@@ -265,6 +267,7 @@ impl MetalRenderer {
             quads_pipeline_state,
             underlines_pipeline_state,
             monochrome_sprites_pipeline_state,
+            glyph_override: None,
             polychrome_sprites_pipeline_state,
             surfaces_pipeline_state,
             unit_vertices,
@@ -275,6 +278,47 @@ impl MetalRenderer {
             path_intermediate_msaa_texture: None,
             path_sample_count: PATH_SAMPLE_COUNT,
         }
+    }
+
+    /// Draws glyphs with the named functions of `shader.source`, compiled now after gpui's own
+    /// source, or with gpui's own again for `None`. On `Err` the stages drawn are unchanged.
+    pub fn set_glyph_shader(&mut self, shader: Option<crate::GlyphShader>) -> Result<(), String> {
+        let Some(shader) = shader else {
+            self.glyph_override = None;
+            return Ok(());
+        };
+        #[cfg(feature = "runtime_shaders")]
+        {
+            let library = self
+                .device
+                .new_library_with_source(
+                    &format!("{}\n{}", SHADERS_SOURCE_FILE, shader.source),
+                    &metal::CompileOptions::new(),
+                )
+                .map_err(|e| e.to_string())?;
+            let state = try_build_pipeline_state(
+                &self.device,
+                &library,
+                &shader.fragment,
+                &shader.vertex,
+                &shader.fragment,
+                MTLPixelFormat::BGRA8Unorm,
+            )?;
+            self.glyph_override = Some(state);
+            Ok(())
+        }
+        #[cfg(not(feature = "runtime_shaders"))]
+        {
+            let _ = shader;
+            Err("glyph shaders need gpui's runtime_shaders feature".into())
+        }
+    }
+
+    /// The pipeline glyphs are drawn with: the app's while set, else gpui's own.
+    fn glyph_pipeline(&self) -> &metal::RenderPipelineStateRef {
+        self.glyph_override
+            .as_ref()
+            .unwrap_or(&self.monochrome_sprites_pipeline_state)
     }
 
     pub fn layer(&self) -> &metal::MetalLayerRef {
@@ -936,7 +980,7 @@ impl MetalRenderer {
             DevicePixels(texture.width() as i32),
             DevicePixels(texture.height() as i32),
         );
-        command_encoder.set_render_pipeline_state(&self.monochrome_sprites_pipeline_state);
+        command_encoder.set_render_pipeline_state(self.glyph_pipeline());
         command_encoder.set_vertex_buffer(
             SpriteInputIndex::Vertices as u64,
             Some(&self.unit_vertices),
@@ -1191,12 +1235,31 @@ fn build_pipeline_state(
     fragment_fn_name: &str,
     pixel_format: metal::MTLPixelFormat,
 ) -> metal::RenderPipelineState {
+    try_build_pipeline_state(
+        device,
+        library,
+        label,
+        vertex_fn_name,
+        fragment_fn_name,
+        pixel_format,
+    )
+    .unwrap_or_else(|e| panic!("{e}"))
+}
+
+fn try_build_pipeline_state(
+    device: &metal::DeviceRef,
+    library: &metal::LibraryRef,
+    label: &str,
+    vertex_fn_name: &str,
+    fragment_fn_name: &str,
+    pixel_format: metal::MTLPixelFormat,
+) -> Result<metal::RenderPipelineState, String> {
     let vertex_fn = library
         .get_function(vertex_fn_name, None)
-        .expect("error locating vertex function");
+        .map_err(|e| format!("error locating vertex function {vertex_fn_name}: {e}"))?;
     let fragment_fn = library
         .get_function(fragment_fn_name, None)
-        .expect("error locating fragment function");
+        .map_err(|e| format!("error locating fragment function {fragment_fn_name}: {e}"))?;
 
     let descriptor = metal::RenderPipelineDescriptor::new();
     descriptor.set_label(label);
@@ -1214,7 +1277,7 @@ fn build_pipeline_state(
 
     device
         .new_render_pipeline_state(&descriptor)
-        .expect("could not create render pipeline state")
+        .map_err(|e| format!("could not create render pipeline state: {e}"))
 }
 
 fn build_path_sprite_pipeline_state(
@@ -1352,4 +1415,59 @@ pub struct PathSprite {
 pub struct SurfaceBounds {
     pub bounds: Bounds<ScaledPixels>,
     pub content_mask: ContentMask<ScaledPixels>,
+}
+
+#[cfg(all(test, feature = "runtime_shaders"))]
+mod tests {
+    use super::*;
+    use crate::GlyphShader;
+
+    #[test]
+    fn a_glyph_shader_that_fails_to_compile_leaves_gpui_s_own_in_place() {
+        if metal::Device::system_default().is_none() {
+            return;
+        }
+        let mut renderer = MetalRenderer::new(Arc::new(Mutex::new(InstanceBufferPool::default())));
+        // gpui's own pipeline is labelled "monochrome_sprites"; a replacement takes its
+        // fragment function's name as its label.
+        let own = "monochrome_sprites";
+        let garbage = GlyphShader {
+            source: "this is not metal".into(),
+            vertex: "monochrome_sprite_vertex".into(),
+            fragment: "garbage_fragment".into(),
+        };
+        let err = renderer.set_glyph_shader(Some(garbage)).unwrap_err();
+        assert!(err.contains("error"), "{err}");
+        assert_eq!(renderer.glyph_pipeline().label(), own);
+
+        // A source that compiles but lacks the named function is refused the same way.
+        let missing = GlyphShader {
+            source: String::new(),
+            vertex: "monochrome_sprite_vertex".into(),
+            fragment: "no_such_fragment".into(),
+        };
+        let err = renderer.set_glyph_shader(Some(missing)).unwrap_err();
+        assert!(err.contains("no_such_fragment"), "{err}");
+        assert_eq!(renderer.glyph_pipeline().label(), own);
+
+        // One that compiles takes over, and `None` gives gpui's own back.
+        let plain = GlyphShader {
+            source: "fragment float4 plain_glyph_fragment(MonochromeSpriteFragmentInput input [[stage_in]]) { return input.color; }".into(),
+            vertex: "monochrome_sprite_vertex".into(),
+            fragment: "plain_glyph_fragment".into(),
+        };
+        renderer.set_glyph_shader(Some(plain)).unwrap();
+        assert_eq!(renderer.glyph_pipeline().label(), "plain_glyph_fragment");
+        renderer.set_glyph_shader(None).unwrap();
+        assert_eq!(renderer.glyph_pipeline().label(), own);
+    }
+
+    #[test]
+    fn the_glyph_shader_prelude_is_gpui_s_own_sprite_stages() {
+        assert!(crate::GLYPH_SHADER_PRELUDE.starts_with("struct MonochromeSpriteVertexOutput {"));
+        assert!(crate::GLYPH_SHADER_PRELUDE.trim_end().ends_with("return color;\n}"));
+        assert!(crate::GLYPH_SHADER_PRELUDE.contains("fragment float4 monochrome_sprite_fragment("));
+        assert!(!crate::GLYPH_SHADER_PRELUDE.contains("Polychrome"));
+        assert!(SHADERS_SOURCE_FILE.contains(crate::GLYPH_SHADER_PRELUDE));
+    }
 }
