@@ -817,7 +817,8 @@ impl Frame {
 
 /// Glyph (monochrome sprite) stages a window draws its text with instead of gpui's own: a Metal
 /// source appended to gpui's shader source, and the names of the vertex and fragment functions
-/// in it. See [`Window::set_glyph_shader`] and [`GLYPH_SHADER_PRELUDE`].
+/// in it, and optionally stages for its emoji. See [`Window::set_glyph_shader`] and
+/// [`GLYPH_SHADER_PRELUDE`].
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct GlyphShader {
     /// Metal source, compiled after gpui's own, so it may use every declaration in it.
@@ -826,11 +827,29 @@ pub struct GlyphShader {
     pub vertex: String,
     /// The fragment function's name, with the signature of `monochrome_sprite_fragment`.
     pub fragment: String,
+    /// Stages for the window's emoji, from the same source; `None` leaves them to gpui.
+    pub emoji: Option<EmojiStages>,
+}
+
+/// Emoji stages: the names of a vertex and a fragment function in a [`GlyphShader`]'s source,
+/// with the signatures of `polychrome_sprite_vertex` and `polychrome_sprite_fragment`. They draw
+/// only the colour sprites painted as emoji (whose `emoji` field is 1); pictures are drawn by
+/// gpui's own stages as ever. See [`EMOJI_SHADER_PRELUDE`].
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct EmojiStages {
+    /// The vertex function's name, with the signature of `polychrome_sprite_vertex`.
+    pub vertex: String,
+    /// The fragment function's name, with the signature of `polychrome_sprite_fragment`.
+    pub fragment: String,
 }
 
 /// gpui's own glyph stages, the lines of its Metal shader source from the sprite stage's
 /// structs through `monochrome_sprite_fragment`: what a glyph shader replaces and may build on.
 pub const GLYPH_SHADER_PRELUDE: &str = glyph_prelude::PRELUDE;
+
+/// gpui's own colour sprite stages, the lines of its Metal shader source from their structs
+/// through `polychrome_sprite_fragment`: what emoji stages replace and may build on.
+pub const EMOJI_SHADER_PRELUDE: &str = glyph_prelude::EMOJI_PRELUDE;
 
 /// gpui's whole Metal shader source, which a glyph shader's `source` is appended to (after a
 /// newline) before it is compiled, so a tool can compile a glyph shader as a window would
@@ -847,6 +866,14 @@ mod glyph_prelude {
         Ok(text) => text,
         Err(_) => panic!("shaders.metal is not UTF-8"),
     };
+    const EMOJI_START: usize = find(SHADERS, b"struct PolychromeSpriteVertexOutput", 0);
+    const EMOJI_FRAGMENT: usize = find(SHADERS, b"fragment float4 polychrome_sprite_fragment(", EMOJI_START);
+    const EMOJI_END: usize = find(SHADERS, b"\n}\n", EMOJI_FRAGMENT) + 3;
+    pub(super) const EMOJI_PRELUDE: &str =
+        match std::str::from_utf8(SHADERS.split_at(EMOJI_END).0.split_at(EMOJI_START).1) {
+            Ok(text) => text,
+            Err(_) => panic!("shaders.metal is not UTF-8"),
+        };
 
     /// Where `needle` first occurs in `hay` at or after `from`; a build error when it does not.
     const fn find(hay: &[u8], needle: &[u8], from: usize) -> usize {
@@ -1842,8 +1869,9 @@ impl Window {
     }
 
     /// Replaces this window's monochrome sprite (glyph) stages with the named functions from
-    /// the shader's source, which is appended to gpui's own shader source and compiled now.
-    /// `None` restores gpui's own. `Err` carries the Metal compiler's message when the source
+    /// the shader's source, which is appended to gpui's own shader source and compiled now, and
+    /// its emoji stages too when the shader names them (pictures keep gpui's own; the glyph clock
+    /// is bound to the emoji stages as to the glyph ones). `None` restores gpui's own. `Err` carries the Metal compiler's message when the source
     /// does not compile or lacks a named function, and the stages drawn stay as they were.
     /// Other windows keep their own. macOS only: elsewhere this is always an `Err`.
     pub fn set_glyph_shader(&mut self, shader: Option<GlyphShader>) -> Result<(), String> {
@@ -3117,7 +3145,7 @@ impl Window {
 
             self.next_frame.scene.insert_primitive(PolychromeSprite {
                 order: 0,
-                pad: 0,
+                emoji: 1,
                 grayscale: false,
                 bounds,
                 corner_radii: Default::default(),
@@ -3231,7 +3259,7 @@ impl Window {
 
         self.next_frame.scene.insert_primitive(PolychromeSprite {
             order: 0,
-            pad: 0,
+            emoji: 0,
             grayscale,
             bounds: bounds
                 .map_origin(|origin| origin.floor())

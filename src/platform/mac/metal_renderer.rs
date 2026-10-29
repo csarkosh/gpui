@@ -109,6 +109,8 @@ pub(crate) struct MetalRenderer {
     monochrome_sprites_pipeline_state: metal::RenderPipelineState,
     /// The app's glyph stages, drawn instead of gpui's own while set (`set_glyph_shader`).
     glyph_override: Option<metal::RenderPipelineState>,
+    /// The app's emoji stages, drawn instead of gpui's own for emoji while set.
+    emoji_override: Option<metal::RenderPipelineState>,
     /// Seconds on the app's clock for the glyph stages, bound at `SpriteInputIndex::GlyphTime`
     /// on every glyph draw (`set_glyph_shader_time`).
     glyph_time: f32,
@@ -271,6 +273,7 @@ impl MetalRenderer {
             underlines_pipeline_state,
             monochrome_sprites_pipeline_state,
             glyph_override: None,
+            emoji_override: None,
             glyph_time: 0.0,
             polychrome_sprites_pipeline_state,
             surfaces_pipeline_state,
@@ -289,6 +292,7 @@ impl MetalRenderer {
     pub fn set_glyph_shader(&mut self, shader: Option<crate::GlyphShader>) -> Result<(), String> {
         let Some(shader) = shader else {
             self.glyph_override = None;
+            self.emoji_override = None;
             return Ok(());
         };
         #[cfg(feature = "runtime_shaders")]
@@ -308,7 +312,19 @@ impl MetalRenderer {
                 &shader.fragment,
                 MTLPixelFormat::BGRA8Unorm,
             )?;
+            let emoji = match &shader.emoji {
+                Some(stages) => Some(try_build_pipeline_state(
+                    &self.device,
+                    &library,
+                    &stages.fragment,
+                    &stages.vertex,
+                    &stages.fragment,
+                    MTLPixelFormat::BGRA8Unorm,
+                )?),
+                None => None,
+            };
             self.glyph_override = Some(state);
+            self.emoji_override = emoji;
             Ok(())
         }
         #[cfg(not(feature = "runtime_shaders"))]
@@ -334,6 +350,13 @@ impl MetalRenderer {
         self.glyph_override
             .as_ref()
             .unwrap_or(&self.monochrome_sprites_pipeline_state)
+    }
+
+    /// The pipeline emoji are drawn with: the app's while set, else gpui's own.
+    fn emoji_pipeline(&self) -> &metal::RenderPipelineStateRef {
+        self.emoji_override
+            .as_ref()
+            .unwrap_or(&self.polychrome_sprites_pipeline_state)
     }
 
     pub fn layer(&self) -> &metal::MetalLayerRef {
@@ -1052,8 +1075,53 @@ impl MetalRenderer {
         true
     }
 
+    /// Draws a batch of colour sprites: all with gpui's own stages, or, while the app's emoji
+    /// stages are set, each run of emoji with those and each run of pictures with gpui's, in
+    /// the batch's order.
     fn draw_polychrome_sprites(
         &self,
+        texture_id: AtlasTextureId,
+        sprites: &[PolychromeSprite],
+        instance_buffer: &mut InstanceBuffer,
+        instance_offset: &mut usize,
+        viewport_size: Size<DevicePixels>,
+        command_encoder: &metal::RenderCommandEncoderRef,
+    ) -> bool {
+        if self.emoji_override.is_none() {
+            return self.draw_polychrome_run(
+                &self.polychrome_sprites_pipeline_state,
+                texture_id,
+                sprites,
+                instance_buffer,
+                instance_offset,
+                viewport_size,
+                command_encoder,
+            );
+        }
+        for (range, emoji) in emoji_runs(sprites.iter().map(|s| s.emoji != 0)) {
+            let pipeline = if emoji {
+                self.emoji_pipeline()
+            } else {
+                &self.polychrome_sprites_pipeline_state
+            };
+            if !self.draw_polychrome_run(
+                pipeline,
+                texture_id,
+                &sprites[range],
+                instance_buffer,
+                instance_offset,
+                viewport_size,
+                command_encoder,
+            ) {
+                return false;
+            }
+        }
+        true
+    }
+
+    fn draw_polychrome_run(
+        &self,
+        pipeline: &metal::RenderPipelineStateRef,
         texture_id: AtlasTextureId,
         sprites: &[PolychromeSprite],
         instance_buffer: &mut InstanceBuffer,
@@ -1071,7 +1139,7 @@ impl MetalRenderer {
             DevicePixels(texture.width() as i32),
             DevicePixels(texture.height() as i32),
         );
-        command_encoder.set_render_pipeline_state(&self.polychrome_sprites_pipeline_state);
+        command_encoder.set_render_pipeline_state(pipeline);
         command_encoder.set_vertex_buffer(
             SpriteInputIndex::Vertices as u64,
             Some(&self.unit_vertices),
@@ -1096,6 +1164,17 @@ impl MetalRenderer {
             SpriteInputIndex::Sprites as u64,
             Some(&instance_buffer.metal_buffer),
             *instance_offset as u64,
+        );
+        let glyph_time = self.glyph_time();
+        command_encoder.set_vertex_bytes(
+            SpriteInputIndex::GlyphTime as u64,
+            mem::size_of_val(&glyph_time) as u64,
+            &glyph_time as *const f32 as *const _,
+        );
+        command_encoder.set_fragment_bytes(
+            SpriteInputIndex::GlyphTime as u64,
+            mem::size_of_val(&glyph_time) as u64,
+            &glyph_time as *const f32 as *const _,
         );
         command_encoder.set_fragment_texture(SpriteInputIndex::AtlasTexture as u64, Some(&texture));
 
@@ -1444,10 +1523,95 @@ pub struct SurfaceBounds {
     pub content_mask: ContentMask<ScaledPixels>,
 }
 
+/// The runs of a colour sprite batch, in order: each a range of sprites and whether they are
+/// emoji.
+fn emoji_runs(flags: impl Iterator<Item = bool>) -> Vec<(std::ops::Range<usize>, bool)> {
+    let mut runs: Vec<(std::ops::Range<usize>, bool)> = Vec::new();
+    for (i, emoji) in flags.enumerate() {
+        match runs.last_mut() {
+            Some((range, e)) if *e == emoji => range.end = i + 1,
+            _ => runs.push((i..i + 1, emoji)),
+        }
+    }
+    runs
+}
+
 #[cfg(all(test, feature = "runtime_shaders"))]
 mod tests {
     use super::*;
-    use crate::GlyphShader;
+    use crate::{EmojiStages, GlyphShader};
+
+    fn plain_glyphs(emoji: Option<EmojiStages>) -> GlyphShader {
+        GlyphShader {
+            source: "fragment float4 plain_glyph_fragment(MonochromeSpriteFragmentInput input [[stage_in]]) { return input.color; }\n\
+                fragment float4 plain_emoji_fragment(PolychromeSpriteFragmentInput input [[stage_in]]) { return float4(1.0); }"
+                .into(),
+            vertex: "monochrome_sprite_vertex".into(),
+            fragment: "plain_glyph_fragment".into(),
+            emoji,
+        }
+    }
+
+    #[test]
+    fn emoji_stages_draw_emoji_until_none_and_a_bad_one_changes_nothing() {
+        if metal::Device::system_default().is_none() {
+            return;
+        }
+        let mut renderer = MetalRenderer::new(Arc::new(Mutex::new(InstanceBufferPool::default())));
+        // gpui's own colour sprite pipeline is labelled "polychrome_sprites".
+        let own = "polychrome_sprites";
+        assert_eq!(renderer.emoji_pipeline().label(), own);
+
+        // Glyph stages alone leave emoji to gpui.
+        renderer.set_glyph_shader(Some(plain_glyphs(None))).unwrap();
+        assert_eq!(renderer.glyph_pipeline().label(), "plain_glyph_fragment");
+        assert_eq!(renderer.emoji_pipeline().label(), own);
+
+        // Emoji stages that name a missing function are refused, and neither pipeline changes.
+        let missing = plain_glyphs(Some(EmojiStages { vertex: "polychrome_sprite_vertex".into(), fragment: "no_such_emoji".into() }));
+        let err = renderer.set_glyph_shader(Some(missing)).unwrap_err();
+        assert!(err.contains("no_such_emoji"), "{err}");
+        renderer.set_glyph_shader(None).unwrap();
+        let missing = plain_glyphs(Some(EmojiStages { vertex: "polychrome_sprite_vertex".into(), fragment: "no_such_emoji".into() }));
+        assert!(renderer.set_glyph_shader(Some(missing)).is_err());
+        assert_eq!(renderer.glyph_pipeline().label(), "monochrome_sprites", "the glyphs were not taken over either");
+        assert_eq!(renderer.emoji_pipeline().label(), own);
+
+        // Good ones take over emoji, and `None` gives both back.
+        let good = plain_glyphs(Some(EmojiStages { vertex: "polychrome_sprite_vertex".into(), fragment: "plain_emoji_fragment".into() }));
+        renderer.set_glyph_shader(Some(good)).unwrap();
+        assert_eq!(renderer.glyph_pipeline().label(), "plain_glyph_fragment");
+        assert_eq!(renderer.emoji_pipeline().label(), "plain_emoji_fragment");
+        renderer.set_glyph_shader(None).unwrap();
+        assert_eq!(renderer.emoji_pipeline().label(), own);
+    }
+
+    #[test]
+    fn a_batch_of_colour_sprites_splits_into_runs_of_emoji_and_pictures_in_order() {
+        let flags = [false, false, true, true, true, false, true];
+        assert_eq!(
+            emoji_runs(flags.iter().copied()),
+            vec![(0..2, false), (2..5, true), (5..6, false), (6..7, true)]
+        );
+        assert_eq!(emoji_runs([true].into_iter()), vec![(0..1, true)]);
+        assert!(emoji_runs(std::iter::empty()).is_empty());
+    }
+
+    #[test]
+    fn the_emoji_mark_takes_the_padding_s_place_and_the_sprite_keeps_its_layout() {
+        assert_eq!(std::mem::offset_of!(PolychromeSprite, emoji), 4);
+        assert_eq!(std::mem::offset_of!(PolychromeSprite, grayscale), 8);
+    }
+
+    #[test]
+    fn the_emoji_shader_prelude_is_gpui_s_own_colour_sprite_stages() {
+        assert!(crate::EMOJI_SHADER_PRELUDE.starts_with("struct PolychromeSpriteVertexOutput {"));
+        assert!(crate::EMOJI_SHADER_PRELUDE.contains("fragment float4 polychrome_sprite_fragment("));
+        assert!(crate::EMOJI_SHADER_PRELUDE.trim_end().ends_with("return color;\n}"));
+        assert!(!crate::EMOJI_SHADER_PRELUDE.contains("Monochrome"));
+        assert!(!crate::EMOJI_SHADER_PRELUDE.contains("PathRasterization"));
+        assert!(SHADERS_SOURCE_FILE.contains(crate::EMOJI_SHADER_PRELUDE));
+    }
 
     #[test]
     fn a_glyph_shader_that_fails_to_compile_leaves_gpui_s_own_in_place() {
@@ -1462,6 +1626,7 @@ mod tests {
             source: "this is not metal".into(),
             vertex: "monochrome_sprite_vertex".into(),
             fragment: "garbage_fragment".into(),
+            emoji: None,
         };
         let err = renderer.set_glyph_shader(Some(garbage)).unwrap_err();
         assert!(err.contains("error"), "{err}");
@@ -1472,6 +1637,7 @@ mod tests {
             source: String::new(),
             vertex: "monochrome_sprite_vertex".into(),
             fragment: "no_such_fragment".into(),
+            emoji: None,
         };
         let err = renderer.set_glyph_shader(Some(missing)).unwrap_err();
         assert!(err.contains("no_such_fragment"), "{err}");
@@ -1482,6 +1648,7 @@ mod tests {
             source: "fragment float4 plain_glyph_fragment(MonochromeSpriteFragmentInput input [[stage_in]]) { return input.color; }".into(),
             vertex: "monochrome_sprite_vertex".into(),
             fragment: "plain_glyph_fragment".into(),
+            emoji: None,
         };
         renderer.set_glyph_shader(Some(plain)).unwrap();
         assert_eq!(renderer.glyph_pipeline().label(), "plain_glyph_fragment");
@@ -1515,6 +1682,7 @@ mod tests {
                 .into(),
             vertex: "monochrome_sprite_vertex".into(),
             fragment: "timed_glyph_fragment".into(),
+            emoji: None,
         };
         renderer.set_glyph_shader(Some(timed)).unwrap();
         assert_eq!(renderer.glyph_pipeline().label(), "timed_glyph_fragment");

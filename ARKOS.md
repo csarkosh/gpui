@@ -18,4 +18,8 @@ supplies, with `GlyphShader`, `GLYPH_SHADER_PRELUDE` and `GLYPH_SHADER_BASE` (Ar
 design, 2026-10-28); `Window::set_glyph_shader_time` (tag `v0.2.2-arkos.2`), a clock for the
 glyph stages: seconds the app sets, bound as one `float` at Metal buffer index 5
 (`SpriteInputIndex::GlyphTime`) to both glyph stages on every glyph draw, whether or not an app
-shader is set; gpui's own stages ignore it (Arkos's space effect, 2026-10-28).
+shader is set; gpui's own stages ignore it (Arkos's space effect, 2026-10-28); emoji stages
+(tag `v0.2.2-arkos.3`): `GlyphShader.emoji`, an optional `EmojiStages` from the same source that
+draws the colour sprites painted as emoji, marked by `PolychromeSprite.emoji` (the padding field
+it replaced, so the layout is unchanged), while pictures keep gpui's own stages; the glyph clock
+is bound to them too; with `EMOJI_SHADER_PRELUDE` (Arkos's watercolor emoji, 2026-10-29).
