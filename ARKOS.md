@@ -22,4 +22,8 @@ shader is set; gpui's own stages ignore it (Arkos's space effect, 2026-10-28); e
 (tag `v0.2.2-arkos.3`): `GlyphShader.emoji`, an optional `EmojiStages` from the same source that
 draws the colour sprites painted as emoji, marked by `PolychromeSprite.emoji` (the padding field
 it replaced, so the layout is unchanged), while pictures keep gpui's own stages; the glyph clock
-is bound to them too; with `EMOJI_SHADER_PRELUDE` (Arkos's watercolor emoji, 2026-10-29).
+is bound to them too; with `EMOJI_SHADER_PRELUDE` (Arkos's watercolor emoji, 2026-10-29);
+BGRA surfaces (tag `v0.2.2-arkos.4`): `Window::paint_surface` also draws a 32-bit BGRA
+`CVPixelBuffer` (an app's own rendering) as it is, alpha and all, besides a video's YCbCr frames;
+a surface of any other format is skipped instead of panicking (Arkos's effect menus,
+2026-10-29).
