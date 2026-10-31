@@ -1147,7 +1147,7 @@ fn fs_underline(input: UnderlineVarying) -> @location(0) vec4<f32> {
 
 struct MonochromeSprite {
     order: u32,
-    pad: u32,
+    stamp: f32,
     bounds: Bounds,
     content_mask: Bounds,
     color: Hsla,

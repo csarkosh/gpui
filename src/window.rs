@@ -939,6 +939,13 @@ pub struct Window {
     active: Rc<Cell<bool>>,
     hovered: Rc<Cell<bool>>,
     pub(crate) needs_present: Rc<Cell<bool>>,
+    /// The stamp `paint_glyph` gives its sprites (`with_glyph_stamp`).
+    glyph_stamp: f32,
+    /// The glyph clock as the app last set it and when (`set_glyph_shader_time`).
+    glyph_clock: (f32, Instant),
+    /// Until when a frame with nothing to redraw presents the scene again with the glyph clock
+    /// moved on (`present_glyphs_until`).
+    glyphs_until: Rc<Cell<Option<Instant>>>,
     pub(crate) last_input_timestamp: Rc<Cell<Instant>>,
     pub(crate) refreshing: bool,
     pub(crate) activation_observers: SubscriberSet<(), AnyObserver>,
@@ -1067,6 +1074,7 @@ impl Window {
         let active = Rc::new(Cell::new(platform_window.is_active()));
         let hovered = Rc::new(Cell::new(platform_window.is_hovered()));
         let needs_present = Rc::new(Cell::new(false));
+        let glyphs_until: Rc<Cell<Option<Instant>>> = Rc::new(Cell::new(None));
         let next_frame_callbacks: Rc<RefCell<Vec<FrameCallback>>> = Default::default();
         let last_input_timestamp = Rc::new(Cell::new(Instant::now()));
 
@@ -1097,6 +1105,7 @@ impl Window {
             let invalidator = invalidator.clone();
             let active = active.clone();
             let needs_present = needs_present.clone();
+            let glyphs_until = glyphs_until.clone();
             let next_frame_callbacks = next_frame_callbacks.clone();
             let last_input_timestamp = last_input_timestamp.clone();
             move |request_frame_options| {
@@ -1118,6 +1127,10 @@ impl Window {
                     || (active.get()
                         && last_input_timestamp.get().elapsed() < Duration::from_secs(1));
 
+                // The app's glyph stages still move (`present_glyphs_until`): the scene is
+                // presented again with the glyph clock moved on, without a redraw.
+                let glyphs_moving = glyphs_until.get().is_some_and(|until| Instant::now() < until);
+
                 if invalidator.is_dirty() || request_frame_options.force_render {
                     measure("frame duration", || {
                         handle
@@ -1129,9 +1142,14 @@ impl Window {
                             })
                             .log_err();
                     })
-                } else if needs_present {
+                } else if needs_present || glyphs_moving {
                     handle
-                        .update(&mut cx, |_, window, _| window.present())
+                        .update(&mut cx, |_, window, _| {
+                            if glyphs_moving {
+                                window.advance_glyph_clock();
+                            }
+                            window.present()
+                        })
                         .log_err();
                 }
 
@@ -1322,6 +1340,9 @@ impl Window {
             active,
             hovered,
             needs_present,
+            glyph_stamp: 0.0,
+            glyph_clock: (0.0, Instant::now()),
+            glyphs_until,
             last_input_timestamp,
             refreshing: false,
             activation_observers: SubscriberSet::new(),
@@ -1886,7 +1907,36 @@ impl Window {
     /// schedules a frame nor refreshes the window. It does nothing where glyph shaders are not
     /// supported.
     pub fn set_glyph_shader_time(&mut self, seconds: f32) {
+        self.glyph_clock = (seconds, Instant::now());
         self.platform_window.set_glyph_shader_time(seconds);
+    }
+
+    /// Until `until`, each frame with nothing to redraw presents the last scene again with the
+    /// glyph clock moved on by the time since the app last set it (`set_glyph_shader_time`), so
+    /// glyph stages that read the clock keep moving while no view is redrawn. A later deadline
+    /// replaces an earlier one, never the other way round. A frame that redraws is the app's to
+    /// clock as ever.
+    pub fn present_glyphs_until(&mut self, until: Instant) {
+        if self.glyphs_until.get().is_none_or(|current| current < until) {
+            self.glyphs_until.set(Some(until));
+        }
+    }
+
+    /// Moves the glyph clock on by the time since the app set it, for a frame presented again
+    /// without a redraw.
+    fn advance_glyph_clock(&mut self) {
+        let (seconds, at) = self.glyph_clock;
+        self.platform_window.set_glyph_shader_time(seconds + at.elapsed().as_secs_f32());
+    }
+
+    /// Paints the glyphs inside `f` with `stamp` in their sprites' `stamp` field, which the app's
+    /// glyph stages (`set_glyph_shader`) may read; gpui's own ignore it. Glyphs painted outside
+    /// any call carry 0. Calls nest, the innermost stamp winning.
+    pub fn with_glyph_stamp<R>(&mut self, stamp: f32, f: impl FnOnce(&mut Self) -> R) -> R {
+        let outer = std::mem::replace(&mut self.glyph_stamp, stamp);
+        let result = f(self);
+        self.glyph_stamp = outer;
+        result
     }
 
     /// Mark the window as dirty at the platform level.
@@ -3086,7 +3136,7 @@ impl Window {
             let content_mask = self.content_mask().scale(scale_factor);
             self.next_frame.scene.insert_primitive(MonochromeSprite {
                 order: 0,
-                pad: 0,
+                stamp: self.glyph_stamp,
                 bounds,
                 content_mask,
                 color: color.opacity(element_opacity),
@@ -3207,7 +3257,7 @@ impl Window {
 
         self.next_frame.scene.insert_primitive(MonochromeSprite {
             order: 0,
-            pad: 0,
+            stamp: 0.0,
             bounds: svg_bounds
                 .map_origin(|origin| origin.round())
                 .map_size(|size| size.ceil()),

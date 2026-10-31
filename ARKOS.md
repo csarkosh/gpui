@@ -26,4 +26,9 @@ is bound to them too; with `EMOJI_SHADER_PRELUDE` (Arkos's watercolor emoji, 202
 BGRA surfaces (tag `v0.2.2-arkos.4`): `Window::paint_surface` also draws a 32-bit BGRA
 `CVPixelBuffer` (an app's own rendering) as it is, alpha and all, besides a video's YCbCr frames;
 a surface of any other format is skipped instead of panicking (Arkos's effect menus,
-2026-10-29).
+2026-10-29); glyph stamps and presenting without a redraw (tag `v0.2.2-arkos.5`):
+`MonochromeSprite.stamp`, an `f32` in place of the padding (the layout is unchanged) that
+`Window::with_glyph_stamp` sets for the glyphs painted inside it, 0 elsewhere, for the app's
+glyph stages to read; and `Window::present_glyphs_until`, until whose deadline a frame with
+nothing to redraw presents the last scene again with the glyph clock moved on by the time since
+the app set it (Arkos's watercolor paint-in, 2026-10-30).

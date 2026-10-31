@@ -1672,6 +1672,31 @@ mod tests {
     }
 
     #[test]
+    fn the_glyph_stamp_takes_the_padding_s_place_and_the_sprite_keeps_its_layout() {
+        assert_eq!(std::mem::offset_of!(MonochromeSprite, stamp), 4);
+        assert_eq!(std::mem::offset_of!(MonochromeSprite, bounds), 8);
+    }
+
+    #[test]
+    fn a_glyph_shader_reading_each_sprite_s_stamp_builds_a_pipeline() {
+        if metal::Device::system_default().is_none() {
+            return;
+        }
+        let mut renderer = MetalRenderer::new(Arc::new(Mutex::new(InstanceBufferPool::default())));
+        let stamped = GlyphShader {
+            source: "fragment float4 stamped_glyph_fragment(MonochromeSpriteFragmentInput input [[stage_in]], \
+                constant MonochromeSprite *sprites [[buffer(SpriteInputIndex_Sprites)]], \
+                constant float *time [[buffer(5)]]) { float4 c = input.color; c.a *= saturate(*time - sprites[0].stamp); return c; }"
+                .into(),
+            vertex: "monochrome_sprite_vertex".into(),
+            fragment: "stamped_glyph_fragment".into(),
+            emoji: None,
+        };
+        renderer.set_glyph_shader(Some(stamped)).unwrap();
+        assert_eq!(renderer.glyph_pipeline().label(), "stamped_glyph_fragment");
+    }
+
+    #[test]
     fn the_emoji_shader_prelude_is_gpui_s_own_colour_sprite_stages() {
         assert!(crate::EMOJI_SHADER_PRELUDE.starts_with("struct PolychromeSpriteVertexOutput {"));
         assert!(crate::EMOJI_SHADER_PRELUDE.contains("fragment float4 polychrome_sprite_fragment("));

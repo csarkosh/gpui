@@ -1072,7 +1072,7 @@ float4 underline_fragment(UnderlineFragmentInput input): SV_Target {
 
 struct MonochromeSprite {
     uint order;
-    uint pad;
+    float stamp;
     Bounds bounds;
     Bounds content_mask;
     Hsla color;

@@ -620,7 +620,10 @@ impl Default for TransformationMatrix {
 #[repr(C)]
 pub(crate) struct MonochromeSprite {
     pub order: DrawOrder,
-    pub pad: u32, // align to 8 bytes
+    /// A value for the app's glyph stages (`Window::with_glyph_stamp`), 0 unless the app set one;
+    /// gpui's own stages ignore it. It also aligns the struct to 8 bytes, as the padding it
+    /// replaced did.
+    pub stamp: f32,
     pub bounds: Bounds<ScaledPixels>,
     pub content_mask: ContentMask<ScaledPixels>,
     pub color: Hsla,
