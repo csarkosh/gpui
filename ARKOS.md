@@ -31,4 +31,7 @@ a surface of any other format is skipped instead of panicking (Arkos's effect me
 `Window::with_glyph_stamp` sets for the glyphs painted inside it, 0 elsewhere, for the app's
 glyph stages to read; and `Window::present_glyphs_until`, until whose deadline a frame with
 nothing to redraw presents the last scene again with the glyph clock moved on by the time since
-the app set it (Arkos's watercolor paint-in, 2026-10-30).
+the app set it (Arkos's watercolor paint-in, 2026-10-30).; SVG stamps (tag `v0.2.2-arkos.6`): `Window::paint_svg`
+stamps its sprite with the glyph stamp too, so a shape the app paints as an SVG inside
+`with_glyph_stamp` reaches the app's glyph stages with it (Arkos's watercolor washes its
+terminal's cell backgrounds in, 2026-10-31).
