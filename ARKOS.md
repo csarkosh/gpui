@@ -34,4 +34,9 @@ nothing to redraw presents the last scene again with the glyph clock moved on by
 the app set it (Arkos's watercolor paint-in, 2026-10-30).; SVG stamps (tag `v0.2.2-arkos.6`): `Window::paint_svg`
 stamps its sprite with the glyph stamp too, so a shape the app paints as an SVG inside
 `with_glyph_stamp` reaches the app's glyph stages with it (Arkos's watercolor washes its
-terminal's cell backgrounds in, 2026-10-31).
+terminal's cell backgrounds in, 2026-10-31). One fix rather than a hook (tag `v0.2.2-arkos.7`): every pipeline
+composites alpha "over" (destination factor `OneMinusSourceAlpha`) instead of adding it up, so
+a translucent sprite drawn over translucent content in a window that is not opaque keeps colour
+and alpha in step; adding up left it short of colour for its alpha, which the window server
+showed darker (Arkos's watercolor cell backgrounds read grey over the terminal's half-clear paper,
+2026-11-01).
