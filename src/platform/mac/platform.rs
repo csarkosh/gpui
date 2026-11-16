@@ -66,6 +66,9 @@ use util::ResultExt;
 const NSUTF8StringEncoding: NSUInteger = 4;
 
 const MAC_PLATFORM_IVAR: &str = "platform";
+/// Set by `launch_as_accessory` before `run`: the app launches with no Dock tile or menu bar.
+pub(crate) static LAUNCH_AS_ACCESSORY: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
 static mut APP_CLASS: *const Class = ptr::null();
 static mut APP_DELEGATE_CLASS: *const Class = ptr::null();
 
@@ -486,6 +489,12 @@ impl Platform for MacPlatform {
             let app: id = msg_send![APP_CLASS, sharedApplication];
             let app_delegate: id = msg_send![APP_DELEGATE_CLASS, new];
             app.setDelegate_(app_delegate);
+            // Before the app finishes launching, so it never gets a Dock tile: an accessory stays
+            // one through `applicationDidFinishLaunching:` until the app makes itself regular.
+            if LAUNCH_AS_ACCESSORY.load(std::sync::atomic::Ordering::Relaxed) {
+                // 1 is `NSApplicationActivationPolicyAccessory`.
+                let _: bool = msg_send![app, setActivationPolicy: 1isize];
+            }
 
             let self_ptr = self as *const Self as *const c_void;
             (*app).set_ivar(MAC_PLATFORM_IVAR, self_ptr);

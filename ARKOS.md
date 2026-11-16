@@ -43,4 +43,7 @@ showed darker (Arkos's watercolor cell backgrounds read grey over the terminal's
 policy to accessory before it finished launching stays an accessory, where gpui made every app
 regular in `applicationDidFinishLaunching:`; any other policy still becomes regular (Arkos's
 window takes over from its predecessor during an update with no Dock tile until it is shown,
-2026-11-16).
+2026-11-16). And `launch_as_accessory()` (tag `v0.2.2-arkos.9`): called before
+`Application::run`, it sets the accessory policy right after `run` makes the application, before
+it finishes launching, which an app cannot reach itself (gpui makes its own `NSApplication`
+subclass inside `run`, and making one earlier would make the wrong class).

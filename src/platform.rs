@@ -76,6 +76,15 @@ pub use keystroke::*;
 pub(crate) use linux::*;
 #[cfg(target_os = "macos")]
 pub(crate) use mac::*;
+
+/// macOS: the app launches as an accessory, with no Dock tile and no menu bar, until it makes
+/// itself regular (`NSApplication.setActivationPolicy`). Called before `Application::run`;
+/// afterwards it does nothing. Arkos's window takes over from its predecessor this way during an
+/// update, showing itself only once it is drawn.
+#[cfg(target_os = "macos")]
+pub fn launch_as_accessory() {
+    mac::LAUNCH_AS_ACCESSORY.store(true, std::sync::atomic::Ordering::Relaxed);
+}
 pub use semantic_version::SemanticVersion;
 #[cfg(any(test, feature = "test-support"))]
 pub(crate) use test::*;
