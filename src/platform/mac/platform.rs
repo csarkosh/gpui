@@ -1387,7 +1387,14 @@ extern "C" fn will_finish_launching(_this: &mut Object, _: Sel, _: id) {
 extern "C" fn did_finish_launching(this: &mut Object, _: Sel, _: id) {
     unsafe {
         let app: id = msg_send![APP_CLASS, sharedApplication];
-        app.setActivationPolicy_(NSApplicationActivationPolicyRegular);
+        // An app that made itself an accessory before it finished launching (no Dock tile, no
+        // menu bar, as Arkos's window does while it takes over from its predecessor in an
+        // update) stays one: it turns regular itself when it is ready. Any other policy becomes
+        // regular, as before. 1 is `NSApplicationActivationPolicyAccessory`.
+        let policy: isize = msg_send![app, activationPolicy];
+        if policy != 1 {
+            app.setActivationPolicy_(NSApplicationActivationPolicyRegular);
+        }
 
         let notification_center: *mut Object =
             msg_send![class!(NSNotificationCenter), defaultCenter];

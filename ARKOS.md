@@ -39,4 +39,8 @@ composites alpha "over" (destination factor `OneMinusSourceAlpha`) instead of ad
 a translucent sprite drawn over translucent content in a window that is not opaque keeps colour
 and alpha in step; adding up left it short of colour for its alpha, which the window server
 showed darker (Arkos's watercolor cell backgrounds read grey over the terminal's half-clear paper,
-2026-11-01).
+2026-11-01). One more fix (tag `v0.2.2-arkos.8`): an app that set its activation
+policy to accessory before it finished launching stays an accessory, where gpui made every app
+regular in `applicationDidFinishLaunching:`; any other policy still becomes regular (Arkos's
+window takes over from its predecessor during an update with no Dock tile until it is shown,
+2026-11-16).
